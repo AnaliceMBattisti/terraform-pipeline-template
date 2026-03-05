@@ -14,7 +14,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
-      pull-requests: write # Essencial para o robô comentar
+      pull-requests: write
     strategy:
       matrix:
         directory: ${{ fromJson(inputs.directories) }}
@@ -33,7 +33,7 @@ jobs:
 
       - uses: hashicorp/setup-terraform@v3
         with:
-          terraform_wrapper: true # Habilita a captura do log
+          terraform_wrapper: true # Captura o log para o comentário
 
       - name: Terraform Init
         run: terraform init
@@ -49,10 +49,7 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            // Captura o número do PR de forma garantida
             const prNumber = context.payload.pull_request.number;
-            
-            // Monta o comentário com botão de expandir (details)
             const output = `#### Terraform Plan 📖 \`${{ matrix.directory }}\`
             
             <details><summary>Clique aqui para ver o Plan completo</summary>
@@ -71,11 +68,12 @@ jobs:
               repo: context.repo.repo,
               body: output
             })
+
   apply:
     name: Terraform Apply
     needs: plan
     runs-on: ubuntu-latest
-    environment: production # Trava de aprovação manual
+    environment: production # Ativa o botão de aprovação manual
     permissions:
       contents: read
       id-token: write
@@ -98,10 +96,7 @@ jobs:
 
       - uses: hashicorp/setup-terraform@v3
         with:
-          terraform_wrapper: true
-
-      - uses: hashicorp/setup-terraform@v3
+          terraform_wrapper: true # Removida a duplicata que causava erro
 
       - run: terraform init
       - run: terraform apply -auto-approve
-
