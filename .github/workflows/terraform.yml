@@ -11,13 +11,16 @@ jobs:
   plan:
     name: Terraform Plan
     runs-on: ubuntu-latest
+
     permissions:
       contents: read
       id-token: write
       pull-requests: write
+
     strategy:
       matrix:
         directory: ${{ fromJson(inputs.directories) }}
+
     defaults:
       run:
         working-directory: ${{ matrix.directory }}
@@ -26,20 +29,11 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Authenticate to GCP
-        id: auth_plan
         uses: google-github-actions/auth@v2
         with:
           create_credentials_file: true
           workload_identity_provider: ${{ inputs.wif_provider }}
           service_account: ${{ inputs.service_account }}
-
-      - name: Debug GCP Auth (Plan)
-        run: |
-          echo "### Verificação de Identidade ###"
-          gcloud auth list
-          echo "Caminho do Token: $GOOGLE_APPLICATION_CREDENTIALS"
-          echo "Início do Access Token (se vazio, WIF falhou):"
-          gcloud auth print-access-token | cut -c 1-10
 
       - uses: hashicorp/setup-terraform@v3
         with:
@@ -51,7 +45,7 @@ jobs:
       - name: Terraform Plan
         id: plan
         run: terraform plan -no-color
-        continue-on-error: true 
+        continue-on-error: true
 
       - name: Update Pull Request
         uses: actions/github-script@v7
@@ -61,16 +55,14 @@ jobs:
           script: |
             const prNumber = context.payload.pull_request.number;
             const output = `#### Terraform Plan 📖 \`${{ matrix.directory }}\`
-            
-            <details><summary>Clique aqui para ver o Plan completo</summary>
+
+            <details><summary>Mostrar Plan</summary>
 
             \`\`\`terraform
             ${{ steps.plan.outputs.stdout }}
             \`\`\`
 
-            </details>
-
-            *Pushed by: @${{ github.actor }}, Action: \`${{ github.event_name }}\`*`;
+            </details>`;
 
             github.rest.issues.createComment({
               issue_number: prNumber,
@@ -83,13 +75,17 @@ jobs:
     name: Terraform Apply
     needs: plan
     runs-on: ubuntu-latest
+
     environment: production
+
     permissions:
       contents: read
       id-token: write
+
     strategy:
       matrix:
         directory: ${{ fromJson(inputs.directories) }}
+
     defaults:
       run:
         working-directory: ${{ matrix.directory }}
@@ -98,20 +94,11 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Authenticate to GCP
-        id: auth_apply
         uses: google-github-actions/auth@v2
         with:
-          create_credentials_file: true 
+          create_credentials_file: true
           workload_identity_provider: ${{ inputs.wif_provider }}
           service_account: ${{ inputs.service_account }}
-
-      - name: Debug GCP Auth (Apply)
-        run: |
-          echo "### Verificação de Identidade ###"
-          gcloud auth list
-          echo "Caminho do Token: $GOOGLE_APPLICATION_CREDENTIALS"
-          echo "Início do Access Token:"
-          gcloud auth print-access-token | cut -c 1-10
 
       - uses: hashicorp/setup-terraform@v3
         with:
