@@ -26,14 +26,24 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Authenticate to GCP
+        id: auth_plan
         uses: google-github-actions/auth@v2
         with:
+          create_credentials_file: true
           workload_identity_provider: ${{ inputs.wif_provider }}
           service_account: ${{ inputs.service_account }}
 
+      - name: Debug GCP Auth (Plan)
+        run: |
+          echo "### Verificação de Identidade ###"
+          gcloud auth list
+          echo "Caminho do Token: $GOOGLE_APPLICATION_CREDENTIALS"
+          echo "Início do Access Token (se vazio, WIF falhou):"
+          gcloud auth print-access-token | cut -c 1-10
+
       - uses: hashicorp/setup-terraform@v3
         with:
-          terraform_wrapper: true # Captura o log para o comentário
+          terraform_wrapper: true
 
       - name: Terraform Init
         run: terraform init
@@ -73,7 +83,7 @@ jobs:
     name: Terraform Apply
     needs: plan
     runs-on: ubuntu-latest
-    environment: production # Ativa o botão de aprovação manual
+    environment: production
     permissions:
       contents: read
       id-token: write
@@ -88,15 +98,24 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Authenticate to GCP
+        id: auth_apply
         uses: google-github-actions/auth@v2
         with:
           create_credentials_file: true 
           workload_identity_provider: ${{ inputs.wif_provider }}
           service_account: ${{ inputs.service_account }}
 
+      - name: Debug GCP Auth (Apply)
+        run: |
+          echo "### Verificação de Identidade ###"
+          gcloud auth list
+          echo "Caminho do Token: $GOOGLE_APPLICATION_CREDENTIALS"
+          echo "Início do Access Token:"
+          gcloud auth print-access-token | cut -c 1-10
+
       - uses: hashicorp/setup-terraform@v3
         with:
-          terraform_wrapper: true # Removida a duplicata que causava erro
+          terraform_wrapper: true
 
       - run: terraform init
       - run: terraform apply -auto-approve
