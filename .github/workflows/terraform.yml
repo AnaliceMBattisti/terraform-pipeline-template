@@ -1,26 +1,29 @@
 name: Terraform Pipeline Template
-
 on:
   workflow_call:
     inputs:
-      directories: { required: true, type: string }
-      wif_provider: { required: true, type: string }
-      service_account: { required: true, type: string }
+      directories:
+        required: true
+        type: string
+      wif_provider:
+        required: true
+        type: string
+      service_account:
+        required: true
+        type: string
 
 jobs:
   plan:
-    name: Terraform Plan
+    name: "Plan · ${{ matrix.directory }}"
     runs-on: ubuntu-latest
-
     permissions:
       contents: read
       id-token: write
-      pull-requests: write
-
+      pull-requests: write    
     strategy:
+      fail-fast: true
       matrix:
         directory: ${{ fromJson(inputs.directories) }}
-
     defaults:
       run:
         working-directory: ${{ matrix.directory }}
@@ -40,52 +43,112 @@ jobs:
           terraform_wrapper: true
 
       - name: Terraform Init
+        id: init
         run: terraform init
 
       - name: Terraform Plan
         id: plan
-        run: terraform plan -no-color
-        continue-on-error: true
+        run: |
+          set +e
+          terraform plan -no-color -detailed-exitcode 2>&1 | tee plan-output.txt
+          PLAN_EXIT=${PIPESTATUS[0]}
+          echo "exit_code=$PLAN_EXIT" >> $GITHUB_OUTPUT
+          set -e
 
-      - name: Update Pull Request
+          # 0 = sem mudanças, 2 = com mudanças (ambos OK), 1 = erro real
+          if [ "$PLAN_EXIT" -eq 1 ]; then
+            echo "::error::Terraform plan falhou em ${{ matrix.directory }}"
+            exit 1
+          fi
+          
+      - name: Comment Plan on PR
         uses: actions/github-script@v7
         if: github.event_name == 'pull_request'
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const prNumber = context.payload.pull_request.number;
-            const output = `#### Terraform Plan 📖 \`${{ matrix.directory }}\`
+            const fs = require('fs');
+            const dir = '${{ matrix.directory }}';
+            const exitCode = '${{ steps.plan.outputs.exit_code }}';
+            const planOutput = fs.readFileSync('${{ matrix.directory }}/plan-output.txt', 'utf8');
 
-            <details><summary>Mostrar Plan</summary>
+            const status = exitCode === '1'
+              ? '❌ FALHOU'
+              : exitCode === '0'
+                ? '✅ Sem mudanças'
+                : '✅ Com mudanças';
+
+            const body = `### ${status} — \`${dir}\`
+            <details><summary>Ver output completo</summary>
 
             \`\`\`terraform
-            ${{ steps.plan.outputs.stdout }}
+            ${planOutput}
             \`\`\`
-
             </details>`;
 
-            github.rest.issues.createComment({
-              issue_number: prNumber,
+            // Busca comentário anterior do bot para atualizar ao invés de criar um novo
+            const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: output
-            })
+              issue_number: context.payload.pull_request.number,
+            });
+
+            const marker = `<!-- terraform-plan:${dir} -->`;
+            const existing = comments.find(c =>
+              c.user.type === 'Bot' && c.body.includes(marker)
+            );
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body: marker + '\n' + body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.payload.pull_request.number,
+                body: marker + '\n' + body
+              });
+            }
+
+      - name: Post Plan to Summary
+        if: always()
+        run: |
+          EXIT_CODE="${{ steps.plan.outputs.exit_code }}"
+
+          if [ "$EXIT_CODE" = "1" ]; then
+            STATUS="❌ FALHOU"
+          elif [ "$EXIT_CODE" = "0" ]; then
+            STATUS="✅ Sem mudanças"
+          else
+            STATUS="✅ Com mudanças"
+          fi
+
+          echo "### $STATUS — \`${{ matrix.directory }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "<details><summary>Ver output completo</summary>" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo '```terraform' >> $GITHUB_STEP_SUMMARY
+          cat plan-output.txt >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "</details>" >> $GITHUB_STEP_SUMMARY
 
   apply:
-    name: Terraform Apply
+    name: "Apply · ${{ matrix.directory }}"
     needs: plan
+    if: github.event_name == 'push'    
     runs-on: ubuntu-latest
-
     environment: production
-
     permissions:
       contents: read
       id-token: write
-
     strategy:
+      fail-fast: true
       matrix:
         directory: ${{ fromJson(inputs.directories) }}
-
     defaults:
       run:
         working-directory: ${{ matrix.directory }}
@@ -105,4 +168,40 @@ jobs:
           terraform_wrapper: true
 
       - run: terraform init
-      - run: terraform apply -auto-approve
+
+      - name: Terraform Apply
+        id: apply
+        run: |
+          set +e
+          terraform apply -auto-approve -no-color 2>&1 | tee apply-output.txt
+          APPLY_EXIT=${PIPESTATUS[0]}
+          echo "exit_code=$APPLY_EXIT" >> $GITHUB_OUTPUT
+          set -e
+
+          if [ "$APPLY_EXIT" -ne 0 ]; then
+            echo "::error::Apply falhou em ${{ matrix.directory }}"
+            exit 1
+          fi
+
+      - name: Post Apply Result to Summary
+        if: always()
+        run: |
+          EXIT_CODE="${{ steps.apply.outputs.exit_code }}"
+          DIR="${{ matrix.directory }}"
+
+          if [ "$EXIT_CODE" = "0" ]; then
+            echo "### ✅ Apply concluído — \`$DIR\`" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### ❌ Apply FALHOU — \`$DIR\`" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "> ⚠️ **Atenção:** recursos podem estar em estado parcial." >> $GITHUB_STEP_SUMMARY
+            echo "> Verifique o state com \`terraform state list\` antes de re-aplicar." >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "<details><summary>Ver output completo</summary>" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo '```terraform' >> $GITHUB_STEP_SUMMARY
+          cat apply-output.txt >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "</details>" >> $GITHUB_STEP_SUMMARY
