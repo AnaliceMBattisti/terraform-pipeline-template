@@ -132,9 +132,9 @@ jobs:
   apply:
     name: "Apply · ${{ matrix.directory }}"
     needs: plan
-    if: github.event_name == 'push'
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    environment: production
+    environment: awaiting-apply-approval   # ← renomeado e mais descritivo
     permissions:
       contents: read
       id-token: write
